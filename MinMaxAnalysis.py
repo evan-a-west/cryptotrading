@@ -142,14 +142,27 @@ def minmaxThresholdCheck(pd_data):
     return pd_data
 
 
+def normalize(pd_data):
+    normalizedData = (pd_data - pd_data.min())/(pd_data.max() - pd_data.min())
+    normalizedData["datetime"] = pd_data["datetime"]
+    normalizedData["min"] = pd_data["min"]
+    normalizedData["max"] = pd_data["max"]
+    normalizedData["minmax"] = pd_data["minmax"]
+    return normalizedData
+
+
 def main():
-    filename = "processedData_small.csv"
+    filename = "processedData.csv"
 
     pd_data = readData(filename)
 
     pd_data = generateMinmaxColumn(pd_data)
 
     pd_data = minmaxThresholdCheck(pd_data)
+
+    pd_data = normalize(pd_data)
+
+    pd_data.to_csv("labeledNormalizedData.csv")
 
 
 if __name__ == "__main__":
