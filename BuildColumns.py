@@ -47,6 +47,11 @@ class BuildColumns:
         self.SIGNAL_MAX_ORDER = 25
         self.SIGNAL_MIN_ORDER = 25
 
+        # Gapsize for spliting data
+        self.GAP_SIZE_MINUTES = 7
+        self.RESAMPLE_PERIOD = '30S'
+        self.INTERPOLATION_METHOD = 'linear'
+
         ##################################
         # Logging GLOBALS
         ##################################
@@ -54,7 +59,7 @@ class BuildColumns:
         #                     filename="log_" + str(date.today()) + ".log"
 
         # Create directories, as needed
-        logDirectory = ""
+        logDirectory = "logs/"
         # if(not os.path.exists(logDirectory)):
         #     os.makedirs(logDirectory)
 
@@ -113,22 +118,34 @@ class BuildColumns:
                     year + "_" + month + "_" + day + self.fileExtension
 
                 self.logInfo("Pathname: " + pathname)
+                print("Pathname: " + pathname)
                 if(path.exists(pathname)):
                     data = np.genfromtxt(pathname, dtype=self.dataTypes,
                                          delimiter=',', names=True, usecols=np.arange(0, 10))
+
+                    if(len(DataDictionary[coin]) == 0):
+                        DataDictionary[coin] = data
+                    else:
+                        DataDictionary[coin] = np.append(
+                            DataDictionary[coin], data)
                 else:
                     this_function_name = sys._getframe().f_code.co_name
                     self.logError("In " + this_function_name +
                                   " when reading data, Could not find: " + pathname)
-                    continue
+                    print("In " + this_function_name +
+                          " when reading data, Could not find: " + pathname)
 
-                if(len(DataDictionary[coin]) == 0):
-                    DataDictionary[coin] = data
-                else:
-                    DataDictionary[coin] = np.append(
-                        DataDictionary[coin], data)
                 date = date + timedelta(days=1)
         return DataDictionary
+
+    def readProcessedData(self, filename, dataTypes, columnCount):
+        data = np.genfromtxt(filename, dtype=dataTypes,
+                             delimiter=',', names=True, usecols=np.arange(0, columnCount))
+        pd_data = pd.DataFrame(data=data, columns=data.dtype.names)
+        pd_data["datetime"] = pd.to_datetime(pd_data["datetime"])
+        pd_data["datetimeNotTheIndex"] = pd.to_datetime(
+            pd_data["datetimeNotTheIndex"])
+        return pd_data
 
     def buildColumns(self, coinData):
         pd_data = pd.DataFrame(data=coinData, columns=coinData.dtype.names)
@@ -163,7 +180,7 @@ class BuildColumns:
         end_total = time.time()
         totalTime = (end_total-start_total)
         self.logTime(
-            "All Columns, Multi-Process Execution", totalTime)
+            "All Columns except Alleration, Multi-Process Execution", totalTime)
 
         pd_data = pd.concat(
             [rollingData,
@@ -172,13 +189,21 @@ class BuildColumns:
              future_std_columns.result()],
             axis=1, join='outer')
 
+        acceleration_columns = self.multiProcessAccelerationCalc(
+            windowSizeInMinutes, pd_data)
+        pd_data = pd.concat(
+            [pd_data,
+             acceleration_columns],
+            axis=1, join='outer')
+
         return pd_data
 
-    @staticmethod
+    @ staticmethod
     def __windowSizes():
         # Generate duration values
         # minInDay = 24*60
         minInHour = 60
+        minInDay = minInHour * 24
         windowSizeInMinutes = {}
         pandasRollingMinuteIdentifier = 'T'
 
@@ -187,12 +212,17 @@ class BuildColumns:
         NumHours = 3
         # The data windows grow by <NumMinInIncrement> minutes each loop
         NumMinInIncrement = 10
-        for i in range(0, NumHours):
-            for j in range(NumMinInIncrement, minInHour, NumMinInIncrement):
-                numMin = (i*minInHour + j)
-                windowSizeInMinutes.update(
-                    {str(numMin) + pandasRollingMinuteIdentifier: numMin})
+        # for i in range(0, NumHours):
+        #     for j in range(NumMinInIncrement, minInHour, NumMinInIncrement):
+        #         numMin = (i*minInHour + j)
+        #         windowSizeInMinutes.update(
+        #             {str(numMin) + pandasRollingMinuteIdentifier: numMin})
 
+        # Temporary to save time
+        windowSizeInMinutes.update(
+            {str(NumMinInIncrement) + pandasRollingMinuteIdentifier: NumMinInIncrement,     # 10 min
+             str(minInHour) + pandasRollingMinuteIdentifier: minInHour,  # 1 hr
+             str(minInDay) + pandasRollingMinuteIdentifier: minInDay})  # 1 day
         return windowSizeInMinutes
 
     def calcVelocity(self, windowSize, rollingData, duration):
@@ -206,6 +236,19 @@ class BuildColumns:
         endVelocityTime = time.time()
         self.logTime(columnNameVelocity, endVelocityTime-startVelocityTime)
         return {columnNameVelocity: newColumn}
+
+    def calcAcceleration(self, windowSize, rollingData, duration):
+        ############################
+        # Calc Acceleration
+        ############################
+        startAccelTime = time.time()
+        columnNameAcceleration = "mark_price_" + duration + \
+            "_acceleration_for_" + duration + "_velocity"
+        newColumn = rollingData["mark_price_" + duration + "_velocity"].rolling(window=duration, min_periods=self.MIN_WINDOW_SIZE) \
+            .apply(lambda x: (x[-1]-x[0])/windowSize.get(duration))
+        endAccelTime = time.time()
+        self.logTime(columnNameAcceleration, endAccelTime-startAccelTime)
+        return {columnNameAcceleration: newColumn}
 
     def calcMean(self, windowSize, rollingData, duration):
         ############################
@@ -230,6 +273,23 @@ class BuildColumns:
         endSTDTime = time.time()
         self.logTime(columnNameSTD, endSTDTime-startSTDTime)
         return {columnNameSTD: newColumn}
+
+    def multiProcessAccelerationCalc(self, windowSizeInMinutes, rollingData):
+        #######################################
+        # Calculate Acceleration for all Velocities
+        #######################################
+        start_total = time.time()
+        newAccelColumns = pd.DataFrame()
+        with futures.ProcessPoolExecutor() as pool:
+            for result in pool.map(functools.partial(self.calcAcceleration, windowSizeInMinutes, rollingData), windowSizeInMinutes.keys()):
+                newColumnName = list(result.keys())[0]
+                newColumnData = result[newColumnName]
+                newAccelColumns[newColumnName] = newColumnData
+        end_total = time.time()
+        totalTime = (end_total-start_total)
+        self.logTime(
+            "All Acceleration Columns, Multi-Process Execution", totalTime)
+        return newAccelColumns
 
     def multiProcessVelocityCalc(self, windowSizeInMinutes, rollingData):
         #######################################
@@ -432,6 +492,33 @@ class BuildColumns:
 
         return pd_data
 
+    def splitDataByGaps(self, pd_data):
+        deltas = pd_data["datetime"].diff()[0:]
+        gaps = deltas[deltas > timedelta(minutes=self.GAP_SIZE_MINUTES)]
+
+        pd_data_split = list()
+        start_index = 0
+        for gap_index in gaps.index:
+            pd_data_split.append(pd_data.iloc[start_index:gap_index, :])
+            start_index = gap_index
+        # Append the final split
+        pd_data_split.append(pd_data.iloc[start_index:, :])
+
+        return pd_data_split
+
+    def resampleAndInterpolate(self, data):
+
+        resample_index = pd.date_range(
+            start=data.index[0],  end=data.index[-1], freq=self.RESAMPLE_PERIOD)
+        dummy_data = pd.DataFrame(
+            np.NAN, index=resample_index, columns=data.columns)
+        intermediateResample = data.combine_first(
+            dummy_data).interpolate('time')
+        finalResample = intermediateResample.resample(
+            rule=self.RESAMPLE_PERIOD, origin=data.index[0]).asfreq()
+        # data = data.interpolate(self.INTERPOLATION_METHOD)
+        return finalResample
+
     def readBuildSave(self):
         allCoinData = self.readDataForAllCoins()
 
@@ -444,3 +531,31 @@ class BuildColumns:
         pd_data = self.normalize(pd_data)
 
         pd_data.to_csv("processedData" + str(date.today()) + ".csv")
+
+    def readResampleSave(self):
+        # Data types of columns to read from the folder
+        dataTypes = ['U36', 'f', 'f', 'f', 'f', 'f', 'f', 'i', 'U36',
+                     'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f',
+                     'f', 'f', 'i']
+
+        filename = "processedData2021-03-31.csv"
+        columnCount = 24
+        pd_data = self.readProcessedData(filename, dataTypes, columnCount)
+
+        training_columns = ['mark_price',
+                            'mark_price_10T_velocity', 'mark_price_60T_velocity',
+                            'mark_price_1440T_velocity', 'mark_price_10T_mean',
+                            'mark_price_60T_mean', 'mark_price_1440T_mean', 'mark_price_10T_std',
+                            'mark_price_60T_std', 'mark_price_1440T_std',
+                            'mark_price_10T_acceleration_for_10T_velocity',
+                            'mark_price_60T_acceleration_for_60T_velocity']
+
+        pd_data_split = self.splitDataByGaps(pd_data)
+        new_pd_data = pd.DataFrame(columns=training_columns)
+        for data in pd_data_split:
+            data = data.set_index('datetime')
+            dataReducedCol = data[training_columns]
+            dataResamples = self.resampleAndInterpolate(dataReducedCol)
+            new_pd_data = pd.concat([new_pd_data, dataResamples])
+
+        print("ehllo")
