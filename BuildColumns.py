@@ -230,9 +230,24 @@ class BuildColumns:
 
         # Temporary to save time
         windowSizeInMinutes.update(
-            {str(NumMinInIncrement) + pandasRollingMinuteIdentifier: NumMinInIncrement,     # 10 min
-             str(minInHour) + pandasRollingMinuteIdentifier: minInHour,  # 1 hr
-             str(minInDay) + pandasRollingMinuteIdentifier: minInDay})  # 1 day
+            {# 10 min
+             str(NumMinInIncrement) + pandasRollingMinuteIdentifier: NumMinInIncrement,
+             # 30 min
+             str(30) + pandasRollingMinuteIdentifier: 30,
+             # 1 hr
+             str(minInHour) + pandasRollingMinuteIdentifier: minInHour,
+             # 3 hr
+             str(minInHour*3) + pandasRollingMinuteIdentifier: (minInHour*3),
+             # 12 hr
+             str(minInHour*12) + pandasRollingMinuteIdentifier: (minInHour*12),
+             # 1 day
+             str(minInDay) + pandasRollingMinuteIdentifier: minInDay,
+             # 3 days
+             str(minInDay*3) + pandasRollingMinuteIdentifier: (minInDay*3),
+             # 7 days
+             str(minInDay*7) + pandasRollingMinuteIdentifier: (minInDay*7),
+             # 15 days
+             str(minInDay*15) + pandasRollingMinuteIdentifier: (minInDay*15)})
         return windowSizeInMinutes
 
     def spreadCalc(self, data):
@@ -655,35 +670,39 @@ class BuildColumns:
     def readBuildSave(self):
         allCoinData = self.readDataForAllCoins()
 
-        pd_data = allCoinData["BCH"]
+        for coin in self.coins:
+            pd_data = allCoinData[coin]
 
-        pd_data = self.buildColumns(pd_data)
+            pd_data = self.buildColumns(pd_data)
 
-        training_columns = ['mark_price', 'ask_price', 'bid_price', 'spread',
-                            'mark_price_10T_velocity', 'mark_price_60T_velocity',
-                            'mark_price_1440T_velocity', 'mark_price_10T_mean',
-                            'mark_price_60T_mean', 'mark_price_1440T_mean', 'mark_price_10T_std',
-                            'mark_price_60T_std', 'mark_price_1440T_std',
-                            'mark_price_10T_acceleration_for_10T_velocity',
-                            'mark_price_60T_acceleration_for_60T_velocity']
+            # training_columns = ['mark_price', 'ask_price', 'bid_price', 'spread',
+            #                     'mark_price_10T_velocity', 'mark_price_60T_velocity',
+            #                     'mark_price_1440T_velocity', 'mark_price_10T_mean',
+            #                     'mark_price_60T_mean', 'mark_price_1440T_mean', 'mark_price_10T_std',
+            #                     'mark_price_60T_std', 'mark_price_1440T_std',
+            #                     'mark_price_10T_acceleration_for_10T_velocity',
+            #                     'mark_price_60T_acceleration_for_60T_velocity']
 
-        pd_data_split = self.splitDataByGaps(pd_data)
-        pd_data_resampled = pd.DataFrame(columns=training_columns)
-        for data in pd_data_split:
-            dataReducedCol = data[training_columns]
-            dataResamples = self.resampleAndInterpolate(dataReducedCol)
-            pd_data_resampled = pd.concat([pd_data_resampled, dataResamples])
+            # pd_data_split = self.splitDataByGaps(pd_data)
+            # pd_data_resampled = pd.DataFrame(columns=training_columns)
+            # for data in pd_data_split:
+            #     da taReducedCol = data[training_columns]
+            #     dataResamples = self.resampleAndInterpolate(dataReducedCol)
+            #     pd_data_resampled = pd.concat([pd_data_resampled, dataResamples])
 
-        # Regenerate the "datetimeNotTheIndex" column for use in the minmax calculations
-        pd_data_resampled["datetimeNotTheIndex"] = pd_data_resampled.index
-        pd_data_resampled = self.generateMinmMaxColumn(pd_data_resampled)
+            # # Regenerate the "datetimeNotTheIndex" column for use in the minmax calculations
+            # pd_data_resampled["datetimeNotTheIndex"] = pd_data_resampled.index
+            # pd_data_resampled = self.generateMinmMaxColumn(pd_data_resampled)
 
-        # pd_data_resampled = self.normalize(pd_data_resampled)
-        # pd_data_resampled = pd_data_resampled.drop(
-        #     ["datetimeNotTheIndex"], axis=1)
-        # make sure the index column is named. The name was lost along the way
-        pd_data_resampled.index.name = "datetime"
-        pd_data_resampled.to_csv("processedData" + str(date.today()) + ".csv")
+            # # pd_data_resampled = self.normalize(pd_data_resampled)
+            # # pd_data_resampled = pd_data_resampled.drop(
+            # #     ["datetimeNotTheIndex"], axis=1)
+            # # make sure the index column is named. The name was lost along the way
+            # pd_data_resampled.index.name = "datetime"
+            # pd_data_resampled.to_csv("processedData" + str(date.today()) + ".csv")
+
+            pd_data = self.generateMinmaxColumn(pd_data)
+            pd_data.to_csv("")
 
     def readSplitSave(self, filename):
         #######################################
