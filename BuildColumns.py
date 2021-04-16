@@ -52,6 +52,11 @@ class BuildColumns:
         self.RESAMPLE_PERIOD = '30S'
         self.INTERPOLATION_METHOD = 'linear'
 
+        # Train/Test split data
+        self.TRAIN_TEST_SPLIT__DURATION = '60T'
+        self.TRAIN_TEST_SPLIT__MIN_WINDOW_SIZE = 120
+        self.TRAIN_PERCENT = .70
+
         ##################################
         # Logging GLOBALS
         ##################################
@@ -166,6 +171,7 @@ class BuildColumns:
         future_velocity_columns = {}
         future_mean_columns = {}
         future_std_columns = {}
+        future_spread_columns = {}
 
         start_total = time.time()
 
@@ -176,6 +182,7 @@ class BuildColumns:
                                               windowSizeInMinutes, rollingData)
             future_std_columns = pool.submit(self.multiProcessSTDCalc,
                                              windowSizeInMinutes, rollingData)
+            future_spread_columns = pool.submit(self.spreadCalc, rollingData)
 
         end_total = time.time()
         totalTime = (end_total-start_total)
@@ -186,7 +193,8 @@ class BuildColumns:
             [rollingData,
              future_velocity_columns.result(),
              future_mean_columns.result(),
-             future_std_columns.result()],
+             future_std_columns.result(),
+             future_spread_columns.result()],
             axis=1, join='outer')
 
         acceleration_columns = self.multiProcessAccelerationCalc(
@@ -196,6 +204,8 @@ class BuildColumns:
              acceleration_columns],
             axis=1, join='outer')
 
+        # Drop duplicated columns (needed becaue the "datetimeNotTheIndex" gets duplicated)
+        pd_data = pd_data.loc[:, ~pd_data.columns.duplicated()]
         return pd_data
 
     @ staticmethod
@@ -224,6 +234,10 @@ class BuildColumns:
              str(minInHour) + pandasRollingMinuteIdentifier: minInHour,  # 1 hr
              str(minInDay) + pandasRollingMinuteIdentifier: minInDay})  # 1 day
         return windowSizeInMinutes
+
+    def spreadCalc(self, data):
+        data['spread'] = data['ask_price'] - data['bid_price']
+        return data
 
     def calcVelocity(self, windowSize, rollingData, duration):
         ############################
@@ -493,7 +507,9 @@ class BuildColumns:
         return pd_data
 
     def splitDataByGaps(self, pd_data):
-        deltas = pd_data["datetime"].diff()[0:]
+        # Covert from a datetime index back to a 'standard' index for use the for loop, below. This seems to be the easier fix. Datetime index does not work for the iloc
+        deltas = pd_data.set_index(np.array(range(0, pd_data.shape[0], 1)))[
+            "datetimeNotTheIndex"].diff()[0:]
         gaps = deltas[deltas > timedelta(minutes=self.GAP_SIZE_MINUTES)]
 
         pd_data_split = list()
@@ -507,7 +523,6 @@ class BuildColumns:
         return pd_data_split
 
     def resampleAndInterpolate(self, data):
-
         resample_index = pd.date_range(
             start=data.index[0],  end=data.index[-1], freq=self.RESAMPLE_PERIOD)
         dummy_data = pd.DataFrame(
@@ -519,6 +534,124 @@ class BuildColumns:
         # data = data.interpolate(self.INTERPOLATION_METHOD)
         return finalResample
 
+    def trainTestSplitAClass(self, dataX, dataY, theClass, trainPercent):
+        indices_class = np.where(dataY == theClass)
+        X_class = dataX[indices_class]
+        # class_random_indices = rng.permutation(X_class.shape[0])
+        class_train_size = int(X_class.shape[0]*trainPercent)
+
+        X_class_train = X_class[:class_train_size, :, :]
+        X_class_test = X_class[class_train_size:, :, :]
+
+        Y_class = dataY[indices_class]
+        Y_class_train = Y_class[:class_train_size]
+        Y_class_test = Y_class[class_train_size:]
+
+        return X_class_train, Y_class_train, X_class_test, Y_class_test
+
+    # Training columns must at least have "datetime" and "minmax" columns
+    def trainTestSplit(self, data, training_columns):
+        Dataset = data[training_columns]
+        Dataset = Dataset.dropna()
+        Dataset = Dataset.set_index('datetime')
+
+        X = Dataset.drop('minmax', axis=1)
+        Y = Dataset.minmax
+
+        rollingX = X.rolling(window=self.TRAIN_TEST_SPLIT__DURATION,
+                             min_periods=self.TRAIN_TEST_SPLIT__MIN_WINDOW_SIZE)
+        rollingY = Y.rolling(window=self.TRAIN_TEST_SPLIT__DURATION,
+                             min_periods=self.TRAIN_TEST_SPLIT__MIN_WINDOW_SIZE)
+
+        # tempx = rollingX.count()
+        # totalRowCountX = tempx[np.isnan(tempx.mark_price) == False].shape[0]
+        # tempy = rollingY.count()
+        # totalRowCountY = tempy[np.isnan(tempy) == False].shape[0]
+
+        # Get shape of numpy arrays and create those arrays as empty Ignore NA windows from rolling data (i.e. only accept windows with exactly <self.TRAIN_TEST_SPLIT__DURATION> number of rows).
+        # This is required because the input Numpy arrays to the models need to have the same dimensions.
+        rollingXCount = rollingX.count()
+        numWindows, numColumns = rollingXCount[np.isnan(
+            rollingXCount.mark_price) == False].shape
+        X_Array = np.zeros(
+            [numWindows, self.TRAIN_TEST_SPLIT__MIN_WINDOW_SIZE, numColumns])
+        Y_Array = np.empty(shape=numWindows, dtype=np.int32)
+
+        windowIndex = 0
+
+        for windowX, windowY in zip(rollingX, rollingY):
+            if (windowX.shape[0] == 120):
+                X_Array[windowIndex] = windowX.to_numpy()
+                Y_Array[windowIndex] = windowY[-1]
+                windowIndex = windowIndex + 1
+
+        trainPercent = self.TRAIN_PERCENT
+        X_train_list = []
+        Y_train_list = []
+        X_test_list = []
+        Y_test_list = []
+
+        rng = np.random.default_rng()
+        shuffled_indices = rng.permutation(X_Array.shape[0])
+        X_Array_shuffled = X_Array[shuffled_indices]
+        Y_Array_shuffled = Y_Array[shuffled_indices]
+
+        for theClass in range(0, 3):
+            X_train_temp, Y_train_temp, X_test_temp, Y_test_temp = self.trainTestSplitAClass(
+                X_Array_shuffled, Y_Array_shuffled, theClass, trainPercent)
+
+            X_train_list.append(X_train_temp)
+            Y_train_list.append(Y_train_temp)
+            X_test_list.append(X_test_temp)
+            Y_test_list.append(Y_test_temp)
+
+        X_train = np.append(
+            X_train_list[0], X_train_list[1], axis=0)
+        X_train = np.append(X_train, X_train_list[2], axis=0)
+        randomRows_train = rng.permutation(X_train.shape[0])
+        X_train = X_train[randomRows_train, :, :]
+
+        Y_train = np.append(Y_train_list[0], Y_train_list[1], axis=0)
+        Y_train = np.append(Y_train, Y_train_list[2], axis=0)
+        Y_train = Y_train[randomRows_train]
+
+        X_test = np.append(X_test_list[0], X_test_list[1], axis=0)
+        X_test = np.append(X_test, X_test_list[2], axis=0)
+        randomRows_test = rng.permutation(X_test.shape[0])
+        X_test = X_test[randomRows_test, :, :]
+
+        Y_test = np.append(Y_test_list[0], Y_test_list[1])
+        Y_test = np.append(Y_test, Y_test_list[2])
+        Y_test = Y_test[randomRows_test]
+
+        return X_train, Y_train, X_test, Y_test
+
+    # Check window sizes. Only return X and Y arrays from rolling X and Y dataframes if the rows in the dataframe match <self.TRAIN_TEST_SPLIT__DURATION>
+
+    def checkWindowSize(self, windowX, windowY):
+        if (windowX.shape[0] == self.TRAIN_TEST_SPLIT__DURATION):
+            return windowX.to_numpy(), windowY[-1]
+        else:
+            return None, None
+
+    def save3DNumpyArray(self, dataArray, filename, directory):
+        # Create directories, as needed
+        if(not os.path.exists(directory)):
+            os.makedirs(directory)
+
+        # reshaping the array from 3D matrice to 2D matrice.
+        dataReshaped = dataArray.reshape(dataArray.shape[0], -1)
+        # saving reshaped array to file.
+        np.savetxt(directory + filename, dataReshaped)
+
+    def saveNumpyArray(self, dataArray, filename, directory):
+        # Create directories, as needed
+        if(not os.path.exists(directory)):
+            os.makedirs(directory)
+
+        # saving reshaped array to file.
+        np.savetxt(directory + filename, dataArray)
+
     def readBuildSave(self):
         allCoinData = self.readDataForAllCoins()
 
@@ -526,23 +659,7 @@ class BuildColumns:
 
         pd_data = self.buildColumns(pd_data)
 
-        pd_data = self.generateMinmMaxColumn(pd_data)
-
-        pd_data = self.normalize(pd_data)
-
-        pd_data.to_csv("processedData" + str(date.today()) + ".csv")
-
-    def readResampleSave(self):
-        # Data types of columns to read from the folder
-        dataTypes = ['U36', 'f', 'f', 'f', 'f', 'f', 'f', 'i', 'U36',
-                     'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f',
-                     'f', 'f', 'i']
-
-        filename = "processedData2021-03-31.csv"
-        columnCount = 24
-        pd_data = self.readProcessedData(filename, dataTypes, columnCount)
-
-        training_columns = ['mark_price',
+        training_columns = ['mark_price', 'ask_price', 'bid_price', 'spread',
                             'mark_price_10T_velocity', 'mark_price_60T_velocity',
                             'mark_price_1440T_velocity', 'mark_price_10T_mean',
                             'mark_price_60T_mean', 'mark_price_1440T_mean', 'mark_price_10T_std',
@@ -551,11 +668,56 @@ class BuildColumns:
                             'mark_price_60T_acceleration_for_60T_velocity']
 
         pd_data_split = self.splitDataByGaps(pd_data)
-        new_pd_data = pd.DataFrame(columns=training_columns)
+        pd_data_resampled = pd.DataFrame(columns=training_columns)
         for data in pd_data_split:
-            data = data.set_index('datetime')
             dataReducedCol = data[training_columns]
             dataResamples = self.resampleAndInterpolate(dataReducedCol)
-            new_pd_data = pd.concat([new_pd_data, dataResamples])
+            pd_data_resampled = pd.concat([pd_data_resampled, dataResamples])
 
-        print("ehllo")
+        # Regenerate the "datetimeNotTheIndex" column for use in the minmax calculations
+        pd_data_resampled["datetimeNotTheIndex"] = pd_data_resampled.index
+        pd_data_resampled = self.generateMinmMaxColumn(pd_data_resampled)
+
+        # pd_data_resampled = self.normalize(pd_data_resampled)
+        # pd_data_resampled = pd_data_resampled.drop(
+        #     ["datetimeNotTheIndex"], axis=1)
+        # make sure the index column is named. The name was lost along the way
+        pd_data_resampled.index.name = "datetime"
+        pd_data_resampled.to_csv("processedData" + str(date.today()) + ".csv")
+
+    def readSplitSave(self, filename):
+        #######################################
+        # Read data from "processedData2021-03-29.csv"
+        #######################################
+        # Data types of columns to read from the folder
+        dataTypes = ['U36',
+                     'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f',
+                     'f', 'f', 'f', 'f', 'f',
+                     'U36',
+                     'f', 'f', 'i']
+        # filename = "processedData2021-03-31.csv"
+
+        path = "./" + filename
+        columnCount = 20
+
+        pd_data = self.readProcessedData(path, dataTypes, columnCount)
+
+        training_columns = ['mark_price', 'ask_price', 'bid_price', 'spread',
+                            'mark_price_10T_velocity', 'mark_price_60T_velocity',
+                            'mark_price_1440T_velocity', 'mark_price_10T_mean',
+                            'mark_price_60T_mean', 'mark_price_1440T_mean', 'mark_price_10T_std',
+                            'mark_price_60T_std', 'mark_price_1440T_std',
+                            'mark_price_10T_acceleration_for_10T_velocity',
+                            'mark_price_60T_acceleration_for_60T_velocity', 'minmax', 'datetime']
+
+        X_train, Y_train, X_test, Y_test = self.trainTestSplit(
+            pd_data, training_columns)
+
+        self.save3DNumpyArray(X_train, str(date.today()) +
+                              "X_train.csv", "TrainTestData/")
+        self.saveNumpyArray(Y_train, str(date.today()) +
+                            "Y_train.csv", "TrainTestData/")
+        self.save3DNumpyArray(X_test,  str(date.today()) +
+                              "X_test.csv", "TrainTestData/")
+        self.saveNumpyArray(Y_test, str(date.today()) +
+                            "Y_test.csv", "TrainTestData/")
