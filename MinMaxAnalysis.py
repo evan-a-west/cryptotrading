@@ -70,7 +70,7 @@ def generateMinmaxColumn(pd_data):
     return pd_data
 
 
-def minmaxThresholdCheck(pd_data):
+def minmaxThresholdCheckSerial(pd_data):
     # grab just the rows with non-zero min and max values for easy comparison
     subset = pd_data.loc[(pd_data['minmax'] != NEITHER_FLAG)]
 
@@ -142,6 +142,11 @@ def minmaxThresholdCheck(pd_data):
     return pd_data
 
 
+def generateMinmaxColumnScipy(pd_data):
+    maxData = signal.argrelmax(data=pd_data["mark_price"].values, order=)
+    return peaks
+
+
 def normalize(pd_data):
     normalizedData = (pd_data - pd_data.min())/(pd_data.max() - pd_data.min())
     normalizedData["datetime"] = pd_data["datetime"]
@@ -156,9 +161,12 @@ def main():
 
     pd_data = readData(filename)
 
+    # Serial
     pd_data = generateMinmaxColumn(pd_data)
+    pd_data = minmaxThresholdCheckSerial(pd_data)
 
-    pd_data = minmaxThresholdCheck(pd_data)
+    # Scipy
+    pd_data = generateMinmacColumnScipy(pd_data)
 
     pd_data = normalize(pd_data)
 

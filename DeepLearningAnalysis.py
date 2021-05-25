@@ -34,6 +34,39 @@ def trainTestSplitAClass(indexArray, splitIndex, endIndex):
     return Train, Test
 
 
+def BuildWindows(dataX, dataY, WindowIndices):
+    # Build Train Windows
+    numWindowsTrain = len(WindowIndices)
+    numColumns = dataX.shape[1]
+    X_split = np.zeros(
+        [numWindowsTrain, TRAIN_TEST_SPLIT__MIN_WINDOW_SIZE, numColumns])
+    Y_split = np.empty(shape=numWindowsTrain, dtype=np.int32)
+    for index, windowIndex in zip(range(0, len(WindowIndices)), WindowIndices):
+        # The final row of of the window needs to include windowIndex, so build the start and stop indices accordingly
+        windowStartIndex = windowIndex - TRAIN_TEST_SPLIT__MIN_WINDOW_SIZE + 1
+
+        # If the windowIndex happens to the be final index in the X array, then handle that situation
+        if(windowIndex == len(dataX)-1):
+            X_split[index] = dataX[windowStartIndex:, :]
+        # This is normal situation (i.e. windowIndex is not the final index in the array)
+        else:
+            windowEndIndex = windowIndex + 1
+            X_split[index] = dataX[windowStartIndex:windowEndIndex, :]
+        # Take hte label from The final row in the window
+        Y_split[index] = dataY[windowIndex]
+
+        print("Index: " + str(index))
+        data = X_split[index, :, :]
+        data_normalized = (data - data.min(axis=0)) / \
+            (data.max(axis=0) - data.min(axis=0))
+        X_split[index, :, :] = data_normalized
+
+    dataX_Windowed = da.from_array(X_split)
+    dataY_Windowed = da.from_array(Y_split)
+
+    return dataX_Windowed, dataY_Windowed
+
+
 def main():
     client = Client(n_workers=8, threads_per_worker=2, memory_limit='1GB')
     print(client)
@@ -125,62 +158,71 @@ def main():
     np.random.shuffle(TestIndices)
 
     # Build Train Windows
-    numWindowsTrain = len(TrainIndices)
-    numColumns = X_train_level_1.shape[1]
-    X_Train = np.zeros(
-        [numWindowsTrain, TRAIN_TEST_SPLIT__MIN_WINDOW_SIZE, numColumns])
-    Y_Train = np.empty(shape=numWindowsTrain, dtype=np.int32)
-    for index, windowIndex in zip(range(0, len(TrainIndices)), TrainIndices):
-        # The final row of of the window needs to include windowIndex, so build the start and stop indices accordingly
-        windowStartIndex = windowIndex - TRAIN_TEST_SPLIT__MIN_WINDOW_SIZE + 1
+    X_Train, Y_Train = BuildWindows(
+        X_train_level_1, Y_train_level_1, TrainIndices)
 
-        # If the windowIndex happens to the be final index in the X array, then handle that situation
-        if(windowIndex == len(X_train_level_1)-1):
-            X_Train[index] = X_train_level_1[windowStartIndex:, :]
-        # This is normal situation (i.e. windowIndex is not the final index in the array)
-        else:
-            windowEndIndex = windowIndex + 1
-            X_Train[index] = X_train_level_1[windowStartIndex:windowEndIndex, :]
-        # Take hte label from The final row in the window
-        Y_Train[index] = Y_train_level_1[windowIndex]
+    # numWindowsTrain = len(TrainIndices)
+    # numColumns = X_train_level_1.shape[1]
+    # X_Train = np.zeros(
+    #     [numWindowsTrain, TRAIN_TEST_SPLIT__MIN_WINDOW_SIZE, numColumns])
+    # Y_Train = np.empty(shape=numWindowsTrain, dtype=np.int32)
+    # for index, windowIndex in zip(range(0, len(TrainIndices)), TrainIndices):
+    #     # The final row of of the window needs to include windowIndex, so build the start and stop indices accordingly
+    #     windowStartIndex = windowIndex - TRAIN_TEST_SPLIT__MIN_WINDOW_SIZE + 1
 
-        print("Index: " + str(index))
-        data = X_Train[index, :, :]
-        data_normalized = (data - data.min(axis=0)) / \
-            (data.max(axis=0) - data.min(axis=0))
-        X_Train[index, :, :] = data_normalized
+    #     # If the windowIndex happens to the be final index in the X array, then handle that situation
+    #     if(windowIndex == len(X_train_level_1)-1):
+    #         X_Train[index] = X_train_level_1[windowStartIndex:, :]
+    #     # This is normal situation (i.e. windowIndex is not the final index in the array)
+    #     else:
+    #         windowEndIndex = windowIndex + 1
+    #         X_Train[index] = X_train_level_1[windowStartIndex:windowEndIndex, :]
+    #     # Take hte label from The final row in the window
+    #     Y_Train[index] = Y_train_level_1[windowIndex]
 
-    X_Train = da.from_array(X_Train)
-    Y_Train = da.from_array(Y_Train)
+    #     print("Index: " + str(index))
+    #     data = X_Train[index, :, :]
+    #     data_normalized = (data - data.min(axis=0)) / \
+    #         (data.max(axis=0) - data.min(axis=0))
+    #     X_Train[index, :, :] = data_normalized
+
+    # X_Train = da.from_array(X_Train)
+    # Y_Train = da.from_array(Y_Train)
 
     # Build Test Windows
-    numWindowsTest = len(TestIndices)
-    numColumns = X_train_level_1.shape[1]
-    X_Test = np.zeros(
-        [numWindowsTest, TRAIN_TEST_SPLIT__MIN_WINDOW_SIZE, numColumns])
-    Y_Test = np.empty(shape=numWindowsTest, dtype=np.int32)
-    for index, windowIndex in zip(range(0, len(TestIndices)), TestIndices):
-        # The final row of of the window needs to include windowIndex, so build the start and stop indices accordingly
-        windowStartIndex = windowIndex - TRAIN_TEST_SPLIT__MIN_WINDOW_SIZE + 1
+    X_Test, Y_Test = BuildWindows(
+        X_train_level_1, Y_train_level_1, TestIndices)
 
-        # If the windowIndex happens to the be final index in the X array, then handle that situation
-        if(windowIndex == len(X)-1):
-            X_Test[index] = X_train_level_1[windowStartIndex:, :]
-        # This is normal situation (i.e. windowIndex is not the final index in the array)
-        else:
-            windowEndIndex = windowIndex + 1
-            X_Test[index] = X_train_level_1[windowStartIndex:windowEndIndex, :]
-        # Take the label from The final row in the window
-        Y_Test[index] = Y[windowIndex]
+    # numWindowsTest = len(TestIndices)
+    # numColumns = X_train_level_1.shape[1]
+    # X_Test = np.zeros(
+    #     [numWindowsTest, TRAIN_TEST_SPLIT__MIN_WINDOW_SIZE, numColumns])
+    # Y_Test = np.empty(shape=numWindowsTest, dtype=np.int32)
+    # for index, windowIndex in zip(range(0, len(TestIndices)), TestIndices):
+    #     # The final row of of the window needs to include windowIndex, so build the start and stop indices accordingly
+    #     windowStartIndex = windowIndex - TRAIN_TEST_SPLIT__MIN_WINDOW_SIZE + 1
 
-        print("Index: " + str(index))
-        data = X_Test[index, :, :]
-        data_normalized = (data - data.min(axis=0)) / \
-            (data.max(axis=0) - data.min(axis=0))
-        X_Test[index, :, :] = data_normalized
+    #     # If the windowIndex happens to the be final index in the X array, then handle that situation
+    #     if(windowIndex == len(X)-1):
+    #         X_Test[index] = X_train_level_1[windowStartIndex:, :]
+    #     # This is normal situation (i.e. windowIndex is not the final index in the array)
+    #     else:
+    #         windowEndIndex = windowIndex + 1
+    #         X_Test[index] = X_train_level_1[windowStartIndex:windowEndIndex, :]
+    #     # Take the label from The final row in the window
+    #     Y_Test[index] = Y[windowIndex]
 
-    X_Test = da.from_array(X_Test)
-    Y_Test = da.from_array(Y_Test)
+    #     print("Index: " + str(index))
+    #     data = X_Test[index, :, :]
+    #     data_normalized = (data - data.min(axis=0)) / \
+    #         (data.max(axis=0) - data.min(axis=0))
+    #     X_Test[index, :, :] = data_normalized
+
+    # X_Test = da.from_array(X_Test)
+    # Y_Test = da.from_array(Y_Test)
+
+    # X_test_original, Y_test_original = BuildWindows(
+    #     X_test_level_1, Y_test_level_1, range(0, len(X_test_level_1)))
 
     current_date = str(date.today())
     dir = "DataFromDeepLearningProcessing/DODGE/" + current_date + "/X_Train"
@@ -203,12 +245,12 @@ def main():
         os.makedirs(dir)
     da.to_npy_stack(dir, Y_Test, axis=0)
 
-    dir = "DataFromDeepLearningProcessing/DODGE/" + current_date + "/X_Test_Level_1"
+    dir = "DataFromDeepLearningProcessing/DODGE/" + current_date + "/X_test_level_1"
     if(not os.path.exists(dir)):
         os.makedirs(dir)
     da.to_npy_stack(dir, X_test_level_1, axis=0)
 
-    dir = "DataFromDeepLearningProcessing/DODGE/" + current_date + "/Y_Test_Level_1"
+    dir = "DataFromDeepLearningProcessing/DODGE/" + current_date + "/Y_test_level_1"
     if(not os.path.exists(dir)):
         os.makedirs(dir)
     da.to_npy_stack(dir, Y_test_level_1, axis=0)
