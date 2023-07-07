@@ -21,7 +21,7 @@ def main():
     print(client.dashboard_link)
 
     # filename = "processedData2021-03-31.csv"
-    Root = "DataFromDeepLearningProcessing/DODGE/2021-05-02"
+    Root = "AllOldData/5_29_2021/DataFromDeepLearningProcessing/DODGE/2021-05-02"
 
     dir = "/X_Train"
     path = Root + dir
@@ -53,18 +53,19 @@ def main():
     print(Y_Test.shape)
     print(type(X_Train))
     print(type(X_Train))
+    print(da.isnan(X_Train))
 
-    num_features = 5
-    batch_size = 100
-    epochs = 100
-    model = Sequential()
-    model.add(LSTM(32, input_dim=num_features))
-    model.add(Dropout(0.3))
-    model.add(Dense(1))
-    model.compile(loss='mean_squared_error', optimizer='adam')
+    # num_features = 5
+    # batch_size = 100
+    # epochs = 100
+    # model = Sequential()
+    # model.add(LSTM(32, input_dim=num_features))
+    # model.add(Dropout(0.3))
+    # model.add(Dense(1))
+    # model.compile(loss='mean_squared_error', optimizer='adam')
 
-    model.fit(X_Train[:, :, :num_features].compute(), Y_Train.compute(), validation_data=(
-        X_Test[:, :, :num_features].compute(), Y_Test.compute()), epochs=epochs, batch_size=batch_size, verbose=2)
+    # model.fit(X_Train[:, :, :num_features].compute(), Y_Train.compute(), validation_data=(
+    #     X_Test[:, :, :num_features].compute(), Y_Test.compute()), epochs=epochs, batch_size=batch_size, verbose=2)
 
 
 if __name__ == '__main__':
